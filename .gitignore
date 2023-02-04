@@ -1,0 +1,11 @@
+HasirtRoot/Temp
+HasirtRoot/Library
+HasirtRoot/Logs
+HasirtRoot/obj
+HasirtRoot/.vs
+HasirtRoot/Build
+HasirtRoot/UserSettings
+HasirtRoot/.idea
+*.csproj
+*.sln
+*.vsconfig
