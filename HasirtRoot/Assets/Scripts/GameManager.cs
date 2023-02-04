@@ -4,10 +4,12 @@ using UnityEngine;
 using TMPro;
 using UnityEngine.UI;
 using UnityEngine.SceneManagement;
+using System.Linq;
 
 public enum GameState
 {
     ItemSelect,
+	Countdown,
     Game,
 	Switching,
 	WrongInput,
@@ -26,6 +28,11 @@ public class GameManager : MonoBehaviour
 	public GameObject leftSqrtParentObject;
 	public GameObject rightSqrtParentObject;
 
+	public TMP_Text countdownText;
+
+	public TMP_Text leftPlayerCorrectAnswerText;
+	public TMP_Text rightPlayerCorrectAnswerText;
+
 	public TMP_Text leftPlayerInputText;
 	public TMP_Text rightPlayerInputText;
 
@@ -37,8 +44,14 @@ public class GameManager : MonoBehaviour
 
 	public AnimationCurve girmeAnimationCurve;
 
+	public Image leftIndicator;
+	public Image rightIndicator;
+
+	public Sprite upSprite;
+	public Sprite downSprite;
+
 	int sqrtMinNumberBase = 20;
-	int sqrtMaxNumberBase = 100;
+	int sqrtMaxNumberBase = 40;
 	int sqrtMaxMaxNumber = 100000;
 	int sqrtMaxMinNumber = 10000;
 
@@ -49,16 +62,118 @@ public class GameManager : MonoBehaviour
 	public float girecekItemBaseSpeed = 10.0f;
 	float girecekItemSpeed;
 
-	GameState gameState = GameState.Game;
+	GameState gameState = GameState.ItemSelect;
+
+	bool hasirtRootDone = false;
+
+	public GameObject wheel;
+	public GameObject spinParent;
+	public AnimationCurve spinCurve;
+
+	public IEnumerator Spin()
+	{
+		girecekItem.gameObject.SetActive(false);
+		wheel.SetActive(true);
+		var images = new List<Image>();
+
+		// Populate wheel
+		int previousRandom = -1;
+		for (int i = 0; i < 100; i++)
+		{
+			int random = previousRandom;
+			while(random == previousRandom)
+			{
+				random = Random.Range(0, Items.items.Length);
+			}
+			var itemPrefab = Items.items[random];
+			previousRandom = random;
+			var item = GameObject.Instantiate(itemPrefab);
+			item.transform.SetParent(spinParent.transform, true);
+			images.Add(item.GetComponent<Image>());
+		}
+
+		const float spinTime = 5f;
+		var accumulatedTime = 0f;
+		while (accumulatedTime < spinTime)
+		{
+			spinParent.transform.position -=
+				spinCurve.Evaluate(accumulatedTime / spinTime) * Vector3.right * 10;
+
+			accumulatedTime += Time.deltaTime;
+
+			yield return null;
+		}
+
+		var mid = Screen.width / 2;
+		var selectedImage =
+			images.Aggregate(
+				(curImage, next) => Mathf.Abs(curImage.transform.position.x - mid) < Mathf.Abs(next.transform.position.x - mid)
+					? curImage
+					: next);
+
+		foreach (var image in images)
+		{
+			if (image != selectedImage)
+			{
+				image.CrossFadeAlpha(0, 2, true);
+				GameObject.Destroy(image.gameObject, 2);
+			}
+		}
+
+		float currentTime = 0;
+		float totalTime = 1.0f;
+
+		Vector3 initialPos = selectedImage.transform.position;
+		Vector3 targetPos = girecekItem.transform.position;
+
+		float initialZRot = 0;
+		float targetZRot = 90.0f;
+
+		while(currentTime < totalTime)
+		{
+			selectedImage.transform.position = Vector3.Lerp(initialPos, targetPos, currentTime / totalTime);
+			float rot = Mathf.Lerp(initialZRot, targetZRot, currentTime / totalTime);
+			Quaternion qrot = Quaternion.Euler(0, 0, rot);
+			selectedImage.transform.rotation = qrot;
+			yield return new WaitForEndOfFrame();
+			currentTime = currentTime + Time.deltaTime;
+		}
+		girecekItem.sprite = selectedImage.sprite;
+		girecekItem.gameObject.SetActive(true);
+
+		wheel.SetActive(false);
+		Reset(false);
+		yield return new WaitForSeconds(0.5f);
+		gameState = GameState.Countdown;
+		StartCoroutine(CountdownCoroutine());
+	}
 
 	void Start()
     {
-		SwitchSides();
+		StartCoroutine(Spin());
+		//SwitchSides();
     }
+
+	IEnumerator CountdownCoroutine()
+	{
+		leftSqrtParentObject.SetActive(false);
+		rightSqrtParentObject.SetActive(false);
+		for (int i = 3; i > 0; i--)
+		{
+			countdownText.text = "" + i;
+			yield return new WaitForSeconds(1f);
+		}
+		leftSqrtParentObject.SetActive(true);
+		rightSqrtParentObject.SetActive(true);
+		gameState = GameState.Game;
+		countdownText.text = "GO!";
+		yield return new WaitForSeconds(1f);
+		countdownText.gameObject.SetActive(false);
+	}
 
 	IEnumerator ScreenShake()
 	{
-		const float duration = 2f;
+		const float duration = 3f;
 		var magnitude = 10f;
 		var initPos = uiParent.transform.position;
 		for (var f = 0f; f < duration; f += Time.deltaTime)
@@ -78,6 +193,9 @@ public class GameManager : MonoBehaviour
 	{
 		gameState = GameState.Giriyor;
 		float girmeXPos = isLeftPlayerTurn ? 0 : Screen.width;
+
+		leftPlayerCorrectAnswerText.gameObject.SetActive(true);
+		rightPlayerCorrectAnswerText.gameObject.SetActive(true);
 
 		float currentTime = 0.0f;
 		float totalTime = 1.0f;
@@ -100,11 +218,11 @@ public class GameManager : MonoBehaviour
 	{
 		if(isLeftPlayerTurn)
 		{
-			gameOverText.text = "Soldakine girdi";
+			gameOverText.text = "Right player wins";
 		}
 		else
 		{
-			gameOverText.text = "Sagdakine girdi";
+			gameOverText.text = "Left player wins";
 		}
 
 		gameOverObject.SetActive(true);
@@ -117,10 +235,24 @@ public class GameManager : MonoBehaviour
 
 		if (isLeftPlayerTurn)
 		{
+			float realAnswer = Mathf.Sqrt(leftPlayerSqrtNumber);
+			int leftInput = int.Parse(leftPlayerInput);
+			if (leftInput < realAnswer)
+				leftIndicator.sprite = upSprite;
+			else
+				leftIndicator.sprite = downSprite;
+			leftIndicator.gameObject.SetActive(true);
 			leftPlayerInputText.color = Color.red;
 		}
 		else
 		{
+			float realAnswer = Mathf.Sqrt(rightPlayerSqrtNumber);
+			int rightInput = int.Parse(rightPlayerInput);
+			if (rightInput < realAnswer)
+				rightIndicator.sprite = upSprite;
+			else
+				rightIndicator.sprite = downSprite;
+			rightIndicator.gameObject.SetActive(true);
 			rightPlayerInputText.color = Color.red;
 		}
 
@@ -130,11 +262,13 @@ public class GameManager : MonoBehaviour
 		{
 			leftPlayerInput = "";
 			leftPlayerInputText.color = Color.black;
+			leftIndicator.gameObject.SetActive(false);
 		}
 		else
 		{
 			rightPlayerInput = "";
 			rightPlayerInputText.color = Color.black;
+			rightIndicator.gameObject.SetActive(false);
 		}
 
 		girecekItemSpeed = girecekItemSpeed * 1.2f;
@@ -148,31 +282,39 @@ public class GameManager : MonoBehaviour
 	{
 		gameState = GameState.Switching;
 		Vector3 initialScale = girecekItem.transform.localScale;
-		Vector3 targetScale = new Vector3(-initialScale.x, initialScale.y, initialScale.z);
+		Vector3 targetScale = new Vector3(initialScale.x, -initialScale.y, initialScale.z);
 		float currentTime = 0.0f;
 		float totalTime = 1.0f;
 
-		while(currentTime < totalTime)
+		leftPlayerCorrectAnswerText.gameObject.SetActive(true);
+		rightPlayerCorrectAnswerText.gameObject.SetActive(true);
+
+		while (currentTime < totalTime)
 		{
 			girecekItem.transform.localScale = Vector3.Lerp(initialScale, targetScale, currentTime / totalTime);
 			yield return new WaitForEndOfFrame();
 			currentTime = currentTime + Time.deltaTime;
 		}
 		girecekItem.transform.localScale = targetScale;
-		SwitchSides();
+		Reset(true);
 		gameState = GameState.Game;
 	}
 
-
-	void SwitchSides()
+	void Reset(bool switchSides)
 	{
 		girecekItemSpeed = girecekItemBaseSpeed;
 		leftPlayerInput = "";
 		rightPlayerInput = "";
 
+		leftPlayerCorrectAnswerText.gameObject.SetActive(false);
+		rightPlayerCorrectAnswerText.gameObject.SetActive(false);
+
+		hasirtRootDone = false;
+
 		UpdateTextInputs();
 
-		isLeftPlayerTurn = !isLeftPlayerTurn;
+		if(switchSides)
+			isLeftPlayerTurn = !isLeftPlayerTurn;
 
 		sqrtMinNumberBase = (int)((float)sqrtMinNumberBase * 1.5f);
 		sqrtMaxNumberBase = (int)((float)sqrtMaxNumberBase * 1.5f);
@@ -184,6 +326,14 @@ public class GameManager : MonoBehaviour
 
 		leftPlayerSqrtNumber = Random.Range(sqrtMinNumberBase, sqrtMaxNumberBase);
 		rightPlayerSqrtNumber = Random.Range(sqrtMinNumberBase, sqrtMaxNumberBase);
+
+		leftPlayerCorrectAnswerText.text = "" + Mathf.Sqrt(leftPlayerSqrtNumber);
+		if (leftPlayerCorrectAnswerText.text.Length > 7)
+			leftPlayerCorrectAnswerText.text = leftPlayerCorrectAnswerText.text.Substring(0, 7);
+
+		rightPlayerCorrectAnswerText.text = "" + Mathf.Sqrt(rightPlayerSqrtNumber);
+		if (rightPlayerCorrectAnswerText.text.Length > 7)
+			rightPlayerCorrectAnswerText.text = rightPlayerCorrectAnswerText.text.Substring(0, 7);
 
 		leftPlayerSqrtText.text = "" + leftPlayerSqrtNumber;
 		rightPlayerSqrtText.text = "" + rightPlayerSqrtNumber;
@@ -224,7 +374,7 @@ public class GameManager : MonoBehaviour
 
     void ProcessInput()
 	{
-		if (gameState != GameState.WrongInput || !isLeftPlayerTurn)
+		if ((gameState != GameState.WrongInput || !isLeftPlayerTurn) && !(!isLeftPlayerTurn && hasirtRootDone))
 		{
 			if (Input.GetKeyDown(KeyCode.Alpha0))
 			{
@@ -268,7 +418,7 @@ public class GameManager : MonoBehaviour
 			}
 		}
 
-		if (gameState != GameState.WrongInput || isLeftPlayerTurn)
+		if ((gameState != GameState.WrongInput || isLeftPlayerTurn) && !(isLeftPlayerTurn && hasirtRootDone))
 		{ 
 			if (Input.GetKeyDown(KeyCode.Keypad0))
 			{
@@ -325,33 +475,63 @@ public class GameManager : MonoBehaviour
 
 		if(Input.GetKeyDown(KeyCode.KeypadEnter) && rightPlayerInput.Length > 0)
 		{
-			if(!isLeftPlayerTurn)
+			int rightPlayerInputNumber = int.Parse(rightPlayerInput);
+			if (CheckInput(rightPlayerInputNumber, rightPlayerSqrtNumber))
 			{
-				int rightPlayerInputNumber = int.Parse(rightPlayerInput);
-				if (CheckInput(rightPlayerInputNumber, rightPlayerSqrtNumber))
+				if(!isLeftPlayerTurn)
 				{
 					rightPlayerInputText.color = Color.green;
 					StartCoroutine(SwitchCoroutine());
 				}
 				else
 				{
+					girecekItemSpeed *= 3;
+					rightPlayerInputText.color = Color.green;
+					hasirtRootDone = true;
+					rightPlayerCorrectAnswerText.gameObject.SetActive(true);
+				}
+			}
+			else
+			{
+				if (!isLeftPlayerTurn)
+				{
 					StartCoroutine(WrongCoroutine());
+				}
+				else
+				{
+					rightPlayerInputText.color = Color.red;
+					hasirtRootDone = true;
 				}
 			}
 		}
 		if(Input.GetKeyDown(KeyCode.Return) && leftPlayerInput.Length > 0)
 		{
-			if(isLeftPlayerTurn)
+			int leftPlayerInputNumber = int.Parse(leftPlayerInput);
+			if (CheckInput(leftPlayerInputNumber, leftPlayerSqrtNumber))
 			{
-				int leftPlayerInputNumber = int.Parse(leftPlayerInput);
-				if(CheckInput(leftPlayerInputNumber, leftPlayerSqrtNumber))
+				if (isLeftPlayerTurn)
 				{
 					leftPlayerInputText.color = Color.green;
 					StartCoroutine(SwitchCoroutine());
 				}
 				else
 				{
+					girecekItemSpeed *= 3;
+					leftPlayerInputText.color = Color.green;
+					hasirtRootDone = true;
+					leftPlayerCorrectAnswerText.gameObject.SetActive(true);
+				}
+			}
+			else
+			{
+				if (isLeftPlayerTurn)
+				{
 					StartCoroutine(WrongCoroutine());
+				}
+				else
+				{
+					leftPlayerInputText.color = Color.red;
+					hasirtRootDone = true;
 				}
 			}
 		}
